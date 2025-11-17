@@ -1,0 +1,38 @@
+#!/bin/bash
+#PBS -N FastQC_batch1
+#PBS -l walltime=60:00:00
+#PBS -l select=1:ncpus=24:mpiprocs=8
+#PBS -P HEAL1360 
+#PBS -q smp
+#PBS -e /mnt/lustre/users/cgebbie/WGS/Fastqc_batch1/.err
+#PBS -o /mnt/lustre/users/cgebbie/WGS/Fastqc_batch1/.out
+#PBS -M 28770420@sun.ac.za
+#PBS -m abe
+
+set -euo pipefail 
+
+INPUT_PARENT="/mnt/lustre/groups/HEAL1360/Low_Pass_Lions/Batch1"
+OUTPUT_PARENT="/mnt/lustre/users/cgebbie/WGS/Fastqc_batch1"
+
+module purge 
+module load chpc/BIOMODULES 
+module load fastqc/0.12.1 
+
+mkdir -p "$OUTPUT_PARENT"
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting FastQC on all samples"
+
+for sample_dir in "${INPUT_PARENT}"/*; do
+    sample_name=$(basename "$sample_dir")
+    out_dir="${OUTPUT_PARENT}/${sample_name}"
+    mkdir -p "$out_dir"
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Running FastQC on $sample_name"
+
+    # Run FastQC directly on all FASTQ files in the folder
+    fastqc "${sample_dir}"/*.fq.gz -o "$out_dir" --noextract || \
+        echo "⚠️ Warning: Some files in $sample_name could not be read due to permissions."
+
+done
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') - All FastQC runs finished"

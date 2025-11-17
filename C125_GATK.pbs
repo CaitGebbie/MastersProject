@@ -1,0 +1,95 @@
+#!/bin/bash
+#PBS -N GATK_C125            
+#PBS -P C125_VC         
+#PBS -l select=1:ncpus=24:mpiprocs=24     
+#PBS -l walltime=80:00:00 
+#PBS -q smp           
+#PBS -o GATK125_output.log                
+#PBS -e GATK125_error.log  
+#PBS -M 28770420@sun.ac.za
+#PBS -m abe
+#PBS -P HEAL1360    
+           
+SAMPLE="C125"  
+WORKDIR="/mnt/lustre/users/cgebbie/WGS/CL125"
+REFERENCE="/mnt/lustre/users/cgebbie/WGS/LigerSeq/Liger_ref.fasta"
+
+INPUT_BAM="${WORKDIR}/${SAMPLE}_sortedLiger.bam"
+VCF="${WORKDIR}/${SAMPLE}_variants.vcf"
+log_file="${WORKDIR}/${SAMPLE}_variant_calling.log"
+
+cd $WORKDIR
+log() {
+    echo "$(date +'%Y-%m-%d %H:%M:%S') - $1" >> ${log_file}
+}
+
+echo $INPUT_BAM
+
+# Load modules
+module purge
+module load chpc/BIOMODULES
+module load samtools/1.20
+module load gatk/4.2.6.1
+
+# Step 1: Rebuild BAM with clean header
+log "Extracting SAM and cleaning header"
+
+# Extract full SAM (including header)
+samtools view -h $INPUT_BAM > ${SAMPLE}_raw.sam
+
+awk 'BEGIN {seen=0} /^@SQ/ {
+    split($0, a, "\t");
+    for (i in a) {
+        if (a[i] ~ /^SN:/) {
+            sn = a[i];
+            if (!(sn in seen_sn)) {
+                print $0;
+                seen_sn[sn] = 1;
+            }
+            next;
+        }
+    }
+}
+!/^@SQ/ { print $0 }' ${SAMPLE}_raw.sam > ${SAMPLE}_clean.sam
+
+# Convert to BAM
+samtools view -Sb ${SAMPLE}_clean.sam > ${SAMPLE}_clean.bam
+
+# Sort and index
+samtools sort -o ${SAMPLE}_clean_sorted.bam ${SAMPLE}_clean.bam
+samtools index ${SAMPLE}_clean_sorted.bam
+
+# Step 3: Add Read Groups
+log "Adding Read Groups"
+gatk AddOrReplaceReadGroups \
+  -I ${SAMPLE}_clean_sorted.bam \
+  -O ${SAMPLE}_RG_added.bam \
+  -RGID ${SAMPLE} \
+  -RGLB lib1 \
+  -RGPL illumina \
+  -RGPU unit1 \
+  -RGSM ${SAMPLE}
+
+# Step 4: Sort and index RG BAM (best practice)
+log "Sorting and indexing RG BAM"
+samtools sort -o ${SAMPLE}_final.bam ${SAMPLE}_RG_added.bam
+samtools index ${SAMPLE}_final.bam
+
+# Step 5: Validate final BAM
+log "Validating BAM"
+gatk ValidateSamFile -I ${SAMPLE}_final.bam -M SUMMARY
+
+# Step 6: idxstats
+log "Generating idxstats"
+samtools idxstats ${SAMPLE}_final.bam > ${SAMPLE}_final.idxstats
+
+# Step 7: Variant Calling
+log "Calling variants"
+gatk HaplotypeCaller \
+  -R $REFERENCE \
+  -I ${SAMPLE}_final.bam \
+  -O $VCF \
+  --native-pair-hmm-threads 4
+
+log "Variant calling pipeline finished"
+echo "GATK variant calling completed."
